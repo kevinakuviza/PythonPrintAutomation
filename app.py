@@ -6,7 +6,7 @@ import os
 import time
 
 # === CONFIGURATION ===
-PRINTFUL_API_KEY = 'your_api_key_here'
+PRINTFUL_API_KEY = 'your_api_key_here'  # Replace with your actual API key
 SOURCE_IMAGE_PATH = 'test.png'
 OUTPUT_PREVIEW_PATH = 'alignment_preview.png'
 PRODUCT_ID = 257
@@ -16,7 +16,7 @@ VARIANT_ID = 8852
 TEMPLATE_WIDTH = 4800
 TEMPLATE_HEIGHT = 5100
 
-# === CROP AREAS FROM OFFICIAL TEMPLATE ===
+# === CROP AREAS (per Printful) ===
 FRONT_AREA = (600, 900, 2400, 4200)
 BACK_AREA = (2400, 900, 4200, 4200)
 LEFT_SLEEVE_AREA = (0, 900, 600, 3300)
@@ -29,11 +29,20 @@ BOX_COLORS = {
     "right_sleeve": "orange"
 }
 
-# === STEP 1: Visual Overlay ===
-def draw_alignment_overlay():
-    img = Image.open(SOURCE_IMAGE_PATH).convert("RGBA")
+# === Set resampling filter based on Pillow version ===
+try:
+    RESAMPLE_FILTER = Image.Resampling.LANCZOS
+except AttributeError:
+    RESAMPLE_FILTER = Image.ANTIALIAS
+
+# === STEP 1: Draw visual alignment preview ===
+def draw_alignment_overlay(image_path):
+    img = Image.open(image_path).convert("RGBA")
+
     if img.size != (TEMPLATE_WIDTH, TEMPLATE_HEIGHT):
-        raise ValueError(f"❌ Image must be {TEMPLATE_WIDTH}x{TEMPLATE_HEIGHT}px.")
+        print(f"⚠️ Resizing image from {img.size} to {TEMPLATE_WIDTH}x{TEMPLATE_HEIGHT}")
+        img = img.resize((TEMPLATE_WIDTH, TEMPLATE_HEIGHT), RESAMPLE_FILTER)
+        img.save(image_path)
 
     draw = ImageDraw.Draw(img, "RGBA")
 
@@ -49,7 +58,7 @@ def draw_alignment_overlay():
     img.save(OUTPUT_PREVIEW_PATH)
     print(f"📐 Alignment preview saved as '{OUTPUT_PREVIEW_PATH}'")
 
-# === STEP 2: Prepare Cropped & Encoded Images ===
+# === STEP 2: Crop and encode images ===
 def crop_image(image, box):
     return image.crop(box)
 
@@ -61,10 +70,13 @@ def encode_image_base64(image):
 
 def prepare_images(path):
     image = Image.open(path)
-    if image.size != (TEMPLATE_WIDTH, TEMPLATE_HEIGHT):
-        raise ValueError(f"❌ Source image must be exactly {TEMPLATE_WIDTH}x{TEMPLATE_HEIGHT}px.")
 
-    print(f"✅ Loaded source image: {image.size}")
+    if image.size != (TEMPLATE_WIDTH, TEMPLATE_HEIGHT):
+        print(f"⚠️ Auto-resizing image to {TEMPLATE_WIDTH}x{TEMPLATE_HEIGHT}")
+        image = image.resize((TEMPLATE_WIDTH, TEMPLATE_HEIGHT), RESAMPLE_FILTER)
+        image.save(path)
+
+    print(f"✅ Image loaded: {image.size}")
 
     front = crop_image(image, FRONT_AREA)
     back = crop_image(image, BACK_AREA)
@@ -78,7 +90,7 @@ def prepare_images(path):
         "right_sleeve": encode_image_base64(right_sleeve)
     }
 
-# === STEP 3: Submit to Printful API ===
+# === STEP 3: Submit to Printful ===
 def create_mockup(images):
     url = 'https://api.printful.com/mockup-generator/create-task'
     headers = {
@@ -98,7 +110,7 @@ def create_mockup(images):
         ]
     }
 
-    print("🚀 Submitting mockup generation request to Printful...")
+    print("🚀 Submitting to Printful...")
     response = requests.post(url, json=payload, headers=headers)
     if response.status_code != 200:
         print("❌ API Error:", response.status_code, response.text)
@@ -107,13 +119,13 @@ def create_mockup(images):
     task_key = response.json()["result"]["task_key"]
     return task_key
 
-# === STEP 4: Poll Until Complete ===
+# === STEP 4: Poll until done ===
 def poll_mockup(task_key):
     url = f'https://api.printful.com/mockup-generator/task?task_key={task_key}'
     headers = {'Authorization': f'Bearer {PRINTFUL_API_KEY}'}
 
-    print("⏳ Waiting for Printful to finish mockup...")
-    for _ in range(15):
+    print("⏳ Waiting for Printful mockup...")
+    for i in range(15):
         time.sleep(5)
         response = requests.get(url, headers=headers)
         result = response.json().get("result", {})
@@ -122,19 +134,18 @@ def poll_mockup(task_key):
         if status == "completed":
             print("✅ Mockup generation complete.")
             return result["mockups"][0]["mockup_url"]
-
         elif status == "failed":
             raise RuntimeError("❌ Mockup generation failed.")
 
-    raise TimeoutError("⏰ Timed out waiting for Printful to complete.")
+    raise TimeoutError("⏰ Timed out after 75 seconds.")
 
 # === MAIN ===
 def main():
-    draw_alignment_overlay()  # Optional but useful
+    draw_alignment_overlay(SOURCE_IMAGE_PATH)
     images = prepare_images(SOURCE_IMAGE_PATH)
     task_key = create_mockup(images)
     mockup_url = poll_mockup(task_key)
-    print("🖼️ Final Mockup URL:", mockup_url)
+    print("🖼️ Your mockup is ready:", mockup_url)
 
 if __name__ == "__main__":
     main()
